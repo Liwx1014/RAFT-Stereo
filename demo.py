@@ -53,6 +53,7 @@ def demo(args):
 
 
 if __name__ == '__main__':
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--restore_ckpt', help="restore checkpoint", required=True)
     parser.add_argument('--save_numpy', action='store_true', help='save output as numpy arrays')

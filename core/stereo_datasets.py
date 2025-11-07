@@ -16,7 +16,9 @@ import os.path as osp
 
 from core.utils import frame_utils
 from core.utils.augmentor import FlowAugmentor, SparseFlowAugmentor
-
+import cv2
+cv2.setNumThreads(0)
+cv2.ocl.setUseOpenCL(False)
 
 class StereoDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False, reader=None):
@@ -106,7 +108,7 @@ class StereoDataset(data.Dataset):
 
         flow = flow[:1]
         return self.image_list[index] + [self.disparity_list[index]], img1, img2, flow, valid.float()
-
+    
 
     def __mul__(self, v):
         copy_of_self = copy.deepcopy(self)
@@ -242,9 +244,61 @@ class TartanAir(StereoDataset):
         for img1, img2, disp in zip(image1_list, image2_list, disp_list):
             self.image_list += [ [img1, img2] ]
             self.disparity_list += [ disp ]
+def readDispKITTI(filename):
+    disp = cv2.imread(filename, cv2.IMREAD_ANYDEPTH) / 256.0
+    valid = disp > 0.0
+    return disp, valid
+
+class MyDataSet(StereoDataset):
+    def __init__(self, aug_params=None, root='/data1/home/lwx/work/DataSet/DataSet_Stereo/test_data', image_set='training'):
+        super(MyDataSet, self).__init__(aug_params, sparse=True, reader=readDispKITTI)
+        
+        assert os.path.exists(root),f"{root} does not exist"
+        file_matches = self._find_matching_files(root)
+        for prefix, left_path, right_path, disp_path in file_matches:
+            self.image_list.append([left_path, right_path])
+            self.disparity_list.append(disp_path)
+        
+        logging.info(f"Successfully initialized MyDataSet with {len(self.image_list)} samples.")
+    def _find_matching_files(self, dataset_dir):
+        """
+        根据文件名（不含扩展名）查找匹配的左图、右图和视差图。
+        """
+        left_dir = os.path.join(dataset_dir, 'left')
+        right_dir = os.path.join(dataset_dir, 'right')
+        disparity_dir = os.path.join(dataset_dir, 'disparity')
+
+        if not all(os.path.isdir(d) for d in [left_dir, right_dir, disparity_dir]):
+            raise FileNotFoundError(f"Dataset directory '{dataset_dir}' must contain 'left', 'right', and 'disparity' subdirectories.")
+        
+        # 优先查找 .png 文件，如果找不到再查找 .jpg 文件
+        png_files = glob(os.path.join(left_dir, '*.png'))
+        jpg_files = glob(os.path.join(left_dir, '*.jpg'))
+        left_files = sorted(png_files + jpg_files)
+        
+        file_matches = []
+        for left_path in left_files:
+            # 获取文件名（不含扩展名）作为唯一标识
+            prefix = os.path.splitext(os.path.basename(left_path))[0]
+            
+            # 使用 glob 匹配，以处理不同的文件扩展名 (例如 .png, .jpg)
+            right_path_cand = glob(os.path.join(right_dir, f'{prefix}.*'))
+            disp_path_cand = glob(os.path.join(disparity_dir, f'{prefix}.*'))
+            
+            # 如果左右图和视差图都找到了匹配项
+            if right_path_cand and disp_path_cand:
+                file_matches.append((prefix, left_path, right_path_cand[0], disp_path_cand[0]))
+            else:
+                logging.warning(f"Could not find all matching files for prefix '{prefix}', skipping this file.")
+                
+        if not file_matches:
+            raise FileNotFoundError(f"No complete (left, right, disparity) file sets found in {dataset_dir}.")
+            
+        return file_matches
+    
 
 class KITTI(StereoDataset):
-    def __init__(self, aug_params=None, root='datasets/KITTI', image_set='training'):
+    def __init__(self, aug_params=None, root='/data1/home/lwx/work/DataSet/DataSet_Stereo/KITTI', image_set='training'):
         super(KITTI, self).__init__(aug_params, sparse=True, reader=frame_utils.readDispKITTI)
         assert os.path.exists(root)
 
@@ -255,8 +309,7 @@ class KITTI(StereoDataset):
         for idx, (img1, img2, disp) in enumerate(zip(image1_list, image2_list, disp_list)):
             self.image_list += [ [img1, img2] ]
             self.disparity_list += [ disp ]
-
-
+            
 class Middlebury(StereoDataset):
     def __init__(self, aug_params=None, root='datasets/Middlebury', split='F'):
         super(Middlebury, self).__init__(aug_params, sparse=True, reader=frame_utils.readDispMiddlebury)
@@ -319,4 +372,6 @@ def fetch_dataloader(args):
 
     logging.info('Training with %d image pairs' % len(train_dataset))
     return train_loader
+
+
 
